@@ -1,0 +1,934 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#000000" />
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icon.svg" type="image/svg+xml" />
+<link rel="apple-touch-icon" href="icon.svg" />
+<title>题词器 Teleprompter</title>
+<style>
+  /* ========== 设计变量 ========== */
+  :root {
+    --font-size: 24px;
+    --speed: 60px;        /* 像素/秒 */
+    --margin-top: 6vh;
+    --margin-right: 8vw;
+    --margin-bottom: 6vh;
+    --margin-left: 8vw;
+    --bg-opacity: 1;
+    --text-color: #ffffff;
+    --bg-color: #000000;
+    --mirror: none;       /* scaleX(-1) 水平镜像，配反光提词板 */
+    --anchor-y: 50%;      /* 滚动锚点位置 */
+    --controls-bg: rgba(20,20,24,0.92);
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #000; color: var(--text-color);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC",
+      "Helvetica Neue", Arial, sans-serif;
+    overflow: hidden; overscroll-behavior: none;
+    -webkit-user-select: none; user-select: none;
+    touch-action: pan-y;
+  }
+
+  /* ========== 主舞台 ========== */
+  #stage {
+    position: fixed; inset: 0;
+    background: color-mix(in srgb, var(--bg-color) calc(var(--bg-opacity)*100%), transparent);
+    -webkit-backdrop-filter: blur(0px);
+    overflow: hidden;
+  }
+
+  /* 可滚动的文字容器 */
+  #scrollWrapper {
+    position: absolute;
+    top: var(--margin-top);
+    right: var(--margin-right);
+    bottom: var(--margin-bottom);
+    left: var(--margin-left);
+    overflow: hidden;
+  }
+  /* 镜像层：只做 scaleX(-1)，与滚动分离，避免方向反转 */
+  #mirrorLayer {
+    position: absolute;
+    inset: 0;
+    transform: var(--mirror);
+    transform-origin: center center;
+  }
+  #scrollLayer {
+    will-change: transform;
+    transform: translateY(0px);
+    padding: 0;
+  }
+  #scrollText {
+    font-size: var(--font-size);
+    line-height: 1.7;
+    color: var(--text-color);
+    white-space: pre-wrap;
+    word-break: break-word;
+    letter-spacing: 0.02em;
+    padding: 0;
+  }
+  /* 锚点高亮线——显示"正对着镜头/提词器"的位置 */
+  #anchorLine {
+    position: absolute;
+    left: 0; right: 0;
+    top: 50%;
+    height: 2px;
+    background: rgba(255,80,80,0.45);
+    pointer-events: none;
+    transform: var(--mirror);
+    display: none;
+    z-index: 5;
+  }
+
+  /* ========== 文本编辑区 ========== */
+  #editorPanel {
+    position: fixed;
+    inset: 0;
+    background: rgba(15,15,18,0.98);
+    z-index: 50;
+    display: none;
+    flex-direction: column;
+    padding: max(16px, env(safe-area-inset-top)) 16px 16px;
+    transition: opacity .25s ease;
+  }
+  #editorPanel.show { display: flex; }
+  #editorPanel textarea {
+    flex: 1;
+    width: 100%;
+    background: #0d0d10;
+    color: #e8e8ec;
+    border: 1px solid #2a2a32;
+    border-radius: 10px;
+    padding: 14px;
+    font-size: 16px;
+    line-height: 1.6;
+    resize: none;
+    font-family: inherit;
+    -webkit-user-select: text; user-select: text;
+  }
+  .editorBar {
+    display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap;
+  }
+  .editorBar button { flex: 1; min-width: 70px; }
+
+  /* ========== 控制面板（底部抽屉） ========== */
+  #controlsPanel {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 40;
+    background: var(--controls-bg);
+    color: #fff;
+    padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
+    border-top-left-radius: 14px;
+    border-top-right-radius: 14px;
+    transform: translateY(calc(100% - 44px));
+    transition: transform .28s cubic-bezier(.22,.61,.36,1);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    touch-action: pan-y;
+  }
+  #controlsPanel.open { transform: translateY(0); }
+  .handle {
+    width: 40px; height: 4px;
+    background: #4a4a52;
+    border-radius: 2px;
+    margin: 0 auto 8px;
+  }
+  .controlsRow {
+    display: flex; gap: 12px; flex-wrap: wrap;
+    padding: 6px 0;
+  }
+  .controlsRow label {
+    flex: 0 0 80px;
+    font-size: 12px; color: #b8b8c2;
+    align-self: center;
+  }
+  .controlsRow input[type=range] {
+    flex: 1;
+    accent-color: #ff5555;
+  }
+  .controlsRow .val {
+    flex: 0 0 48px; text-align: right;
+    font-variant-numeric: tabular-nums; font-size: 12px;
+    color: #e8e8f0; align-self: center;
+  }
+  .btnGroup { display: flex; gap: 8px; flex-wrap: wrap; padding: 6px 0; }
+  button {
+    background: #2a2a32;
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    min-width: 48px;
+  }
+  button:active { transform: scale(0.97); background: #3a3a44; }
+  button.active { background: #ff5555; color: #1a1a1a; }
+  button.primary { background: #ff5555; color: #1a1a1a; }
+
+  /* 顶部悬浮小工具 */
+  #topTools {
+    position: fixed; top: max(8px, env(safe-area-inset-top));
+    left: 8px; right: 8px;
+    display: flex; gap: 8px; justify-content: space-between;
+    z-index: 30;
+    pointer-events: none;
+  }
+  #topTools button { pointer-events: auto; opacity: 0.75; }
+
+  /* 状态指示器 */
+  #statusBadge {
+    position: fixed; top: 8px; right: 8px;
+    background: rgba(0,0,0,0.5);
+    color: #fff; font-size: 11px;
+    padding: 4px 10px; border-radius: 12px;
+    z-index: 35; display: none;
+  }
+  #statusBadge.show { display: block; }
+
+  /* 提示 toast */
+  #toast {
+    position: fixed; left: 50%; bottom: 120px;
+    transform: translateX(-50%);
+    background: rgba(0,0,0,0.8); color: #fff;
+    padding: 8px 16px; border-radius: 20px;
+    font-size: 13px; z-index: 100;
+    opacity: 0; pointer-events: none;
+    transition: opacity .3s;
+  }
+  #toast.show { opacity: 1; }
+
+  /* 语音识别模式下的高亮词 */
+  .hi-word {
+    background: rgba(255,85,85,0.25);
+    border-radius: 3px;
+    padding: 0 2px;
+  }
+
+  @media (max-height: 500px) {
+    :root { --font-size: 18px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- 主舞台 -->
+<div id="stage">
+  <div id="scrollWrapper">
+    <div id="mirrorLayer">
+      <div id="scrollLayer">
+        <div id="scrollText">点击右下角「编辑」按钮粘贴/输入你的脚本内容。
+点击播放即可匀速滚动；开启「语音跟随」后，会根据你朗读的实际速度自动匹配滚动节奏。
+
+示例文本（演示用）：
+大家好，欢迎来到今天的分享。今天我们要聊的主题是——如何让视频内容更加专业、更加自然。
+
+在传统的录屏或拍摄中，很多人会依赖提词器来避免忘词。但市面上的提词器要么价格昂贵，要么需要在电脑上运行。于是我们做了一个可以在手机上直接使用的轻量方案。
+
+核心功能包括：第一，速度自由调节，支持匀速滚动；第二，镜像模式，配合反光提词板使用；第三，可调节显示区域距离四周的边距，让文字始终出现在画面中央；第四，智能语音跟随——当你开启后，应用会监听你的朗读声音，自动匹配滚动速度，让提词内容始终"追着你"。
+
+如果你觉得这个小工具不错，欢迎分享给你的朋友。谢谢大家！</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="anchorLine"></div>
+</div>
+
+<!-- 顶部悬浮工具 -->
+<div id="topTools">
+  <div style="display:flex; gap:8px;">
+    <button id="btnPlayPause" class="primary">▶</button>
+    <button id="btnVoice">🎙️ 语音跟随</button>
+  </div>
+  <div style="display:flex; gap:8px;">
+    <button id="btnEdit">✎ 编辑</button>
+    <button id="btnReset">⟲ 回到顶部</button>
+  </div>
+</div>
+<div id="statusBadge"></div>
+<div id="toast"></div>
+
+<!-- 编辑面板 -->
+<div id="editorPanel">
+  <div class="editorBar">
+    <button id="btnLoadDemo">示例文本</button>
+    <button id="btnImport">导入 .txt</button>
+    <button id="btnExport">导出</button>
+    <button id="btnClear">清空</button>
+    <button id="btnSave" class="primary">保存并关闭</button>
+  </div>
+  <textarea id="scriptText" spellcheck="false" placeholder="在这里粘贴或输入你的脚本..."></textarea>
+  <input type="file" id="fileInput" accept=".txt,text/plain" style="display:none" />
+</div>
+
+<!-- 控制面板 -->
+<div id="controlsPanel">
+  <div class="handle"></div>
+
+  <!-- 速度 -->
+  <div class="controlsRow">
+    <label>速度</label>
+    <input type="range" id="speedSlider" min="10" max="300" value="60" step="1" />
+    <div class="val"><span id="speedVal">60</span> px/s</div>
+  </div>
+
+  <!-- 字号 -->
+  <div class="controlsRow">
+    <label>字号</label>
+    <input type="range" id="fontSlider" min="12" max="72" value="24" step="1" />
+    <div class="val"><span id="fontVal">24</span>px</div>
+  </div>
+
+  <!-- 背景透明度 -->
+  <div class="controlsRow">
+    <label>背景透明</label>
+    <input type="range" id="opacitySlider" min="0" max="100" value="100" step="1" />
+    <div class="val"><span id="opacityVal">100</span>%</div>
+  </div>
+
+  <!-- 显示区域边距（四方向） -->
+  <div class="controlsRow">
+    <label>上边距</label>
+    <input type="range" id="marginTop" min="0" max="30" value="6" step="1" />
+    <div class="val"><span id="marginTopVal">6</span>vh</div>
+  </div>
+  <div class="controlsRow">
+    <label>下边距</label>
+    <input type="range" id="marginBottom" min="0" max="30" value="6" step="1" />
+    <div class="val"><span id="marginBottomVal">6</span>vh</div>
+  </div>
+  <div class="controlsRow">
+    <label>左边距</label>
+    <input type="range" id="marginLeft" min="0" max="30" value="8" step="1" />
+    <div class="val"><span id="marginLeftVal">8</span>vw</div>
+  </div>
+  <div class="controlsRow">
+    <label>右边距</label>
+    <input type="range" id="marginRight" min="0" max="30" value="8" step="1" />
+    <div class="val"><span id="marginRightVal">8</span>vw</div>
+  </div>
+
+  <!-- 附加按钮组 -->
+  <div class="btnGroup">
+    <button id="btnMirror">🪞 镜像</button>
+    <button id="btnAnchor">📌 显示锚线</button>
+    <button id="btnPanelClose">收起面板</button>
+  </div>
+
+  <!-- 背景色/文字色 -->
+  <div class="controlsRow">
+    <label>文字颜色</label>
+    <input type="color" id="textColor" value="#ffffff" style="width:60px;height:34px;border:none;background:none;" />
+    <label>背景颜色</label>
+    <input type="color" id="bgColor" value="#000000" style="width:60px;height:34px;border:none;background:none;" />
+  </div>
+</div>
+
+<script>
+/* =======================================================
+ *  题词器核心逻辑（单文件 PWA 版）
+ *  - requestAnimationFrame 匀速滚动
+ *  - Web Speech API 语音跟随
+ *  - 所有参数实时响应 CSS Custom Properties
+ * ======================================================= */
+
+(() => {
+  'use strict';
+
+  /* ---------- 状态 ---------- */
+  const state = {
+    playing: false,
+    voiceMode: false,
+    offset: 0,           // 当前向上偏移量 (px)，scrollLayer 用 translateY
+    speed: 60,           // 匀速速度 px/s，语音模式下作为基准速度
+    lastTs: 0,
+    contentHeight: 0,
+    wrapperHeight: 0,
+    text: '',            // 原始脚本
+    wordSpans: [],       // 分词后的 span 列表（供语音高亮用）
+    recognition: null,
+    matchIndex: 0,       // 已匹配到的词索引
+    // PID 速度调节参数（语音跟随）
+    voiceTargetOffset: 0, // 让匹配词对齐锚线时所需的 offset（px）
+    pidIntegral: 0,
+    pidLastGap: 0,
+  };
+
+  const $ = (id) => document.getElementById(id);
+  const root = document.documentElement;
+
+  /* ---------- 本地存储 ---------- */
+  const LS_KEY = 'teleprompter.state.v1';
+  function saveState() {
+    try {
+      const cfg = {
+        text: $('scriptText').value || state.text,
+        speed: state.speed,
+        fontSize: +$('fontSlider').value,
+        bgOpacity: +$('opacitySlider').value,
+        margins: {
+          t: +$('marginTop').value,
+          b: +$('marginBottom').value,
+          l: +$('marginLeft').value,
+          r: +$('marginRight').value,
+        },
+        mirror: $('btnMirror').classList.contains('active'),
+        textColor: $('textColor').value,
+        bgColor: $('bgColor').value,
+      };
+      localStorage.setItem(LS_KEY, JSON.stringify(cfg));
+    } catch(e) {}
+  }
+  function loadState() {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (!raw) return false;
+      const s = JSON.parse(raw);
+      if (s.text) {
+        state.text = s.text;
+        $('scriptText').value = s.text;
+        buildTextLayer(s.text);
+      }
+      if (s.speed) applySpeed(s.speed);
+      if (s.fontSize) applyFont(s.fontSize);
+      if (s.bgOpacity != null) applyOpacity(s.bgOpacity);
+      if (s.margins) applyMargins(s.margins);
+      if (s.mirror) { $('btnMirror').classList.add('active'); root.style.setProperty('--mirror','scaleX(-1)'); }
+      if (s.textColor) { $('textColor').value = s.textColor; root.style.setProperty('--text-color', s.textColor); }
+      if (s.bgColor)   { $('bgColor').value   = s.bgColor;   root.style.setProperty('--bg-color',   s.bgColor); }
+      return true;
+    } catch(e) { return false; }
+  }
+
+  /* ---------- 文本层构建 ---------- */
+  function buildTextLayer(text) {
+    state.text = text;
+    // 分词：保留标点作为相邻"词"以便匹配；用 span 便于语音模式高亮
+    const tokens = text.match(/[\u4e00-\u9fa5]+|[a-zA-Z0-9]+[a-zA-Z0-9\-_]*|[\s\S]?/gu) || [];
+    // 简单合并：中文字按字分、英文按词分、标点独立
+    let html = '';
+    let idx = 0;
+    const spans = [];
+    for (const tok of tokens) {
+      if (!tok) continue;
+      // 处理中文：每字单独 span，方便逐字高亮
+      if (/^[\u4e00-\u9fa5]+$/.test(tok)) {
+        for (const ch of tok) {
+          const sid = 'w'+idx;
+          html += `<span id="${sid}" class="word">${escape(ch)}</span>`;
+          spans.push({ id: sid, text: ch, start: idx });
+          idx++;
+        }
+      } else if (tok.trim().length > 0) {
+        const sid = 'w'+idx;
+        html += `<span id="${sid}" class="word">${escape(tok)}</span>`;
+        spans.push({ id: sid, text: tok, start: idx });
+        idx++;
+      } else {
+        // 空白保留
+        html += escape(tok);
+      }
+    }
+    $('scrollText').innerHTML = html;
+    state.wordSpans = spans;
+    requestAnimationFrame(measure);
+  }
+  function escape(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  /* ---------- 测量 ---------- */
+  function measure() {
+    state.contentHeight = $('scrollLayer').scrollHeight;
+    state.wrapperHeight  = $('scrollWrapper').clientHeight;
+    // 保证 offset 不超下界
+    const maxOffset = Math.max(0, state.contentHeight - state.wrapperHeight);
+    if (state.offset > maxOffset) state.offset = maxOffset;
+    applyOffset();
+  }
+  function applyOffset() {
+    const maxOffset = Math.max(0, state.contentHeight - state.wrapperHeight);
+    if (state.offset < 0) state.offset = 0;
+    if (state.offset > maxOffset) state.offset = maxOffset;
+    $('scrollLayer').style.transform =
+      `translateY(${-state.offset}px)`;
+  }
+
+  /* ---------- 滚动主循环 ---------- */
+  function tick(ts) {
+    if (!state.lastTs) state.lastTs = ts;
+    const dt = Math.min(0.1, (ts - state.lastTs) / 1000); // 秒，限最大 100ms 防跳
+    state.lastTs = ts;
+
+    if (state.playing) {
+      let speed = state.speed; // 基础速度
+      if (state.voiceMode) {
+        // PID 速度调节：让 offset 平滑逼近 voiceTargetOffset
+        // gap 正 → targetOffset 在当前 offset 之上 → 需要增加 offset（加速）
+        const gap = state.voiceTargetOffset - state.offset;
+        state.pidIntegral += gap * dt;
+        // 积分限幅（防饱和）
+        state.pidIntegral = Math.max(-5000, Math.min(5000, state.pidIntegral));
+        const derivative = (gap - state.pidLastGap) / Math.max(dt, 0.001);
+        state.pidLastGap = gap;
+
+        // PID 增益：Kp 主导快速响应，Ki 消除稳态误差，Kd 抗抖动
+        const Kp = 2.0;      // px/s per px gap → gap=50px 时加 100 px/s
+        const Ki = 1.5;      // per s → 累积到稳态误差的持续影响
+        const Kd = 0.3;      // per s·s → 抑制突变
+        let dynSpeed = state.speed
+          + Kp * gap
+          + Ki * state.pidIntegral
+          + Kd * derivative;
+
+        // 速度限幅：0 ~ 基础速度×4
+        dynSpeed = Math.max(0, Math.min(state.speed * 4, dynSpeed));
+        speed = dynSpeed;
+      }
+      state.offset += speed * dt;
+      applyOffset();
+      const maxOffset = state.contentHeight - state.wrapperHeight;
+      if (maxOffset > 0 && state.offset >= maxOffset) {
+        state.playing = false;
+        updatePlayBtn();
+        showToast('已滚动到底部');
+      }
+    } else if (!state.playing && state.voiceMode) {
+      // 没匹配到声音时，减速回到基础速度模式
+      state.pidIntegral *= 0.9;
+    }
+    requestAnimationFrame(tick);
+  }
+
+  /* ---------- 语音跟随 ---------- */
+  function initVoice() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      showToast('当前浏览器不支持语音识别，请使用 Chrome/Safari 最新版');
+      return null;
+    }
+    const rec = new SR();
+    rec.lang = 'zh-CN';
+    rec.interimResults = true;
+    rec.continuous = true;
+    rec.maxAlternatives = 1;
+
+    let lastFinalText = '';
+    let cachedMatchIdx = 0;
+
+    rec.onresult = (ev) => {
+      let interim = '';
+      let finalTxt = '';
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const r = ev.results[i];
+        if (r.isFinal) finalTxt += r[0].transcript;
+        else interim += r[0].transcript;
+      }
+
+      const newFinal = finalTxt;
+      let matchText = '';
+      if (newFinal && newFinal !== lastFinalText) {
+        const added = newFinal.slice(lastFinalText.length);
+        matchText = added;
+        lastFinalText = newFinal;
+      } else {
+        matchText = interim; // interim 用于实时微调
+      }
+
+      if (!matchText) return;
+
+      // 模糊匹配：在 wordSpans 中从 cachedMatchIdx 往后找
+      const matchLower = normalize(matchText);
+      let foundIdx = findBestMatch(matchLower, cachedMatchIdx);
+      if (foundIdx < 0) return;
+
+      // 计算让匹配词对齐锚线（wrapper 中心）所需的目标 offset
+      const span = document.getElementById(state.wordSpans[foundIdx].id);
+      if (!span) return;
+      const wrapperRect = $('scrollWrapper').getBoundingClientRect();
+      const spanRect = span.getBoundingClientRect();
+      // delta = span 当前屏幕 top - 锚线屏幕 top
+      // 正 → span 在锚线下方 → 需要增加 offset（向上滚）才能对齐
+      const delta = spanRect.top - wrapperRect.top - wrapperRect.height * 0.5;
+      state.voiceTargetOffset = state.offset + delta;
+      // 钳制到合法范围
+      const maxOffset = state.contentHeight - state.wrapperHeight;
+      state.voiceTargetOffset = Math.max(0, Math.min(maxOffset, state.voiceTargetOffset));
+
+      // 高亮已匹配的词
+      highlightTo(foundIdx);
+      cachedMatchIdx = foundIdx;
+      state.matchIndex = foundIdx;
+    };
+
+    rec.onerror = (ev) => {
+      console.warn('SR error', ev.error);
+      if (ev.error === 'not-allowed' || ev.error === 'service-not-allowed') {
+        showToast('麦克风权限被拒绝，请在浏览器设置中允许');
+        stopVoice();
+      }
+    };
+
+    rec.onend = () => {
+      // 自动重启（continuous 有时在静音后会停）
+      if (state.voiceMode) {
+        try { rec.start(); } catch(e) {}
+      }
+    };
+
+    return rec;
+  }
+
+  function normalize(s) {
+    return String(s).toLowerCase()
+      .replace(/[\s,。.!！?？、:：;；""''「」『』…—\-]/g, '');
+  }
+
+  function findBestMatch(text, fromIdx) {
+    if (!text) return -1;
+    const need = normalize(text);
+    if (!need) return -1;
+    // 从 fromIdx 开始，对每个候选 span 做"起点或连续 N 字"匹配
+    // 中文：need 是一串汉字，尝试在 wordSpans[fromIdx..fromIdx+N] 中拼接后做 indexOf
+    // 英文：类似，忽略大小写
+    const MAX_SCAN = 80;
+    let buf = '';
+    for (let i = fromIdx; i < Math.min(state.wordSpans.length, fromIdx + MAX_SCAN); i++) {
+      buf += normalize(state.wordSpans[i].text);
+      if (buf.includes(need) || need.includes(buf)) {
+        // 匹配成功，返回匹配终点
+        return i;
+      }
+      if (buf.length > need.length * 3) break;
+    }
+    // 从 0 开始再扫一遍（防止 fromIdx 不准）
+    buf = '';
+    for (let i = 0; i < Math.min(state.wordSpans.length, MAX_SCAN * 2); i++) {
+      buf += normalize(state.wordSpans[i].text);
+      if (buf.includes(need) || need.includes(buf)) {
+        return i;
+      }
+      if (buf.length > need.length * 3) break;
+    }
+    return -1;
+  }
+
+  let lastHighlightIdx = -1;
+  function highlightTo(idx) {
+    if (idx === lastHighlightIdx) return;
+    if (lastHighlightIdx >= 0 && state.wordSpans[lastHighlightIdx]) {
+      const el = document.getElementById(state.wordSpans[lastHighlightIdx].id);
+      if (el) el.classList.remove('hi-word');
+    }
+    if (state.wordSpans[idx]) {
+      const el = document.getElementById(state.wordSpans[idx].id);
+      if (el) el.classList.add('hi-word');
+    }
+    lastHighlightIdx = idx;
+  }
+
+  function startVoice() {
+    if (!state.recognition) state.recognition = initVoice();
+    if (!state.recognition) return;
+    try {
+      state.recognition.start();
+      state.voiceMode = true;
+      state.playing = true;
+      state.pidIntegral = 0;
+      state.pidLastGap = 0;
+      state.voiceTargetOffset = state.offset; // 初始目标=当前位置
+      $('btnVoice').classList.add('active');
+      $('btnVoice').textContent = '🔴 朗读跟随中';
+      showStatus('🎙️ 语音跟随 · 请开始朗读');
+      updatePlayBtn();
+    } catch(e) {
+      // 可能已在 started 状态
+    }
+  }
+
+  function stopVoice() {
+    state.voiceMode = false;
+    state.pidIntegral = 0;
+    state.pidLastGap = 0;
+    if (state.recognition) {
+      try { state.recognition.stop(); } catch(e) {}
+    }
+    $('btnVoice').classList.remove('active');
+    $('btnVoice').textContent = '🎙️ 语音跟随';
+    hideStatus();
+  }
+
+  /* ---------- 事件绑定 ---------- */
+  function bind() {
+    // 播放/暂停
+    $('btnPlayPause').addEventListener('click', () => {
+      if (state.voiceMode) { stopVoice(); state.playing = false; }
+      state.playing = !state.playing;
+      updatePlayBtn();
+    });
+    updatePlayBtn();
+
+    // 语音跟随
+    $('btnVoice').addEventListener('click', () => {
+      if (state.voiceMode) stopVoice();
+      else startVoice();
+    });
+
+    // 编辑面板
+    $('btnEdit').addEventListener('click', () => {
+      $('scriptText').value = state.text;
+      $('editorPanel').classList.add('show');
+    });
+    $('btnSave').addEventListener('click', () => {
+      const t = $('scriptText').value;
+      if (!t.trim()) { showToast('脚本内容不能为空'); return; }
+      stopVoice();
+      state.offset = 0;
+      state.matchIndex = 0;
+      highlightTo(-1);
+      buildTextLayer(t);
+      $('editorPanel').classList.remove('show');
+      saveState();
+    });
+    $('btnLoadDemo').addEventListener('click', () => {
+      $('scriptText').value = DEMO_TEXT;
+    });
+    $('btnImport').addEventListener('click', () => $('fileInput').click());
+    $('fileInput').addEventListener('change', (ev) => {
+      const f = ev.target.files[0];
+      if (!f) return;
+      const reader = new FileReader();
+      reader.onload = () => { $('scriptText').value = reader.result; };
+      reader.readAsText(f, 'utf-8');
+    });
+    $('btnExport').addEventListener('click', () => {
+      const blob = new Blob([state.text], { type: 'text/plain;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'teleprompter-script.txt';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      showToast('已导出');
+    });
+    $('btnClear').addEventListener('click', () => {
+      if (confirm('确定清空吗？')) $('scriptText').value = '';
+    });
+
+    // 重置
+    $('btnReset').addEventListener('click', () => {
+      state.offset = 0;
+      state.matchIndex = 0;
+      highlightTo(-1);
+      applyOffset();
+    });
+
+    // 控制面板（抽屉）
+    const cp = $('controlsPanel');
+    let draggingHandle = false;
+    const handle = cp.querySelector('.handle');
+    handle.addEventListener('click', () => cp.classList.toggle('open'));
+    $('btnPanelClose').addEventListener('click', () => cp.classList.remove('open'));
+    // 触摸拖动
+    let startY = 0, startOpen = false;
+    cp.addEventListener('touchstart', (e) => {
+      startY = e.touches[0].clientY;
+      startOpen = cp.classList.contains('open');
+    }, { passive: true });
+    cp.addEventListener('touchend', (e) => {
+      const dy = e.changedTouches[0].clientY - startY;
+      if (Math.abs(dy) > 60) {
+        cp.classList.toggle('open', dy < 0); // 上滑打开、下滑关闭
+      }
+    });
+
+    // 滑块
+    $('speedSlider').addEventListener('input', (e) => applySpeed(+e.target.value));
+    $('fontSlider').addEventListener('input', (e) => applyFont(+e.target.value));
+    $('opacitySlider').addEventListener('input', (e) => applyOpacity(+e.target.value));
+    $('marginTop').addEventListener('input', (e) => { $('marginTopVal').textContent = e.target.value; root.style.setProperty('--margin-top', e.target.value + 'vh'); saveState(); });
+    $('marginBottom').addEventListener('input', (e) => { $('marginBottomVal').textContent = e.target.value; root.style.setProperty('--margin-bottom', e.target.value + 'vh'); saveState(); });
+    $('marginLeft').addEventListener('input', (e) => { $('marginLeftVal').textContent = e.target.value; root.style.setProperty('--margin-left', e.target.value + 'vw'); saveState(); });
+    $('marginRight').addEventListener('input', (e) => { $('marginRightVal').textContent = e.target.value; root.style.setProperty('--margin-right', e.target.value + 'vw'); saveState(); });
+
+    // 颜色
+    $('textColor').addEventListener('input', (e) => { root.style.setProperty('--text-color', e.target.value); saveState(); });
+    $('bgColor').addEventListener('input', (e) => { root.style.setProperty('--bg-color', e.target.value); saveState(); });
+
+    // 按钮组
+    $('btnMirror').addEventListener('click', () => {
+      const on = $('btnMirror').classList.toggle('active');
+      root.style.setProperty('--mirror', on ? 'scaleX(-1)' : 'none');
+      saveState();
+    });
+    $('btnAnchor').addEventListener('click', () => {
+      $('btnAnchor').classList.toggle('active');
+      $('anchorLine').style.display =
+        $('btnAnchor').classList.contains('active') ? 'block' : 'none';
+    });
+
+    // 手动拖动 scroll
+    const wrap = $('scrollWrapper');
+    let touchStartY = 0, touchStartOffset = 0;
+    wrap.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1) {
+        touchStartY = e.touches[0].clientY;
+        touchStartOffset = state.offset;
+        state.playing = false; state.lastTs = 0;
+        updatePlayBtn();
+      }
+    }, { passive: true });
+    wrap.addEventListener('touchmove', (e) => {
+      if (e.touches.length !== 1) return;
+      const dy = touchStartY - e.touches[0].clientY; // 手指向上 -> offset 增加
+      state.offset = touchStartOffset + dy;
+      applyOffset();
+    }, { passive: true });
+    // 鼠标拖动（桌面调试）
+    wrap.addEventListener('mousedown', (e) => {
+      touchStartY = e.clientY;
+      touchStartOffset = state.offset;
+      state.playing = false; state.lastTs = 0;
+      const onMove = (ev) => {
+        state.offset = touchStartOffset + (touchStartY - ev.clientY);
+        applyOffset();
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+
+    // 双击暂停/继续
+    let lastTap = 0;
+    wrap.addEventListener('touchend', () => {
+      const now = Date.now();
+      if (now - lastTap < 300) {
+        if (state.voiceMode) { stopVoice(); state.playing = false; }
+        else state.playing = !state.playing;
+        updatePlayBtn();
+      }
+      lastTap = now;
+    });
+
+    // 键盘（桌面调试）
+    document.addEventListener('keydown', (e) => {
+      if (e.target.tagName === 'TEXTAREA') return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (state.voiceMode) { stopVoice(); state.playing = false; }
+        else state.playing = !state.playing;
+        updatePlayBtn();
+      } else if (e.code === 'ArrowUp') {
+        state.offset -= 40; applyOffset();
+      } else if (e.code === 'ArrowDown') {
+        state.offset += 40; applyOffset();
+      } else if (e.code === 'KeyR') {
+        state.offset = 0; applyOffset();
+      }
+    });
+
+    // 窗口尺寸变化
+    window.addEventListener('resize', measure);
+    window.addEventListener('orientationchange', () => setTimeout(measure, 300));
+  }
+
+  /* ---------- 辅助 ---------- */
+  function applySpeed(v) {
+    state.speed = v;
+    $('speedSlider').value = v;
+    $('speedVal').textContent = v;
+    saveState();
+  }
+  function applyFont(v) {
+    root.style.setProperty('--font-size', v + 'px');
+    $('fontSlider').value = v;
+    $('fontVal').textContent = v;
+    requestAnimationFrame(measure);
+    saveState();
+  }
+  function applyOpacity(v) {
+    root.style.setProperty('--bg-opacity', v / 100);
+    $('opacitySlider').value = v;
+    $('opacityVal').textContent = v;
+    saveState();
+  }
+  function applyMargins(m) {
+    $('marginTop').value = m.t; $('marginTopVal').textContent = m.t;
+    $('marginBottom').value = m.b; $('marginBottomVal').textContent = m.b;
+    $('marginLeft').value = m.l; $('marginLeftVal').textContent = m.l;
+    $('marginRight').value = m.r; $('marginRightVal').textContent = m.r;
+    root.style.setProperty('--margin-top',    m.t + 'vh');
+    root.style.setProperty('--margin-bottom', m.b + 'vh');
+    root.style.setProperty('--margin-left',   m.l + 'vw');
+    root.style.setProperty('--margin-right',  m.r + 'vw');
+    requestAnimationFrame(measure);
+  }
+  function updatePlayBtn() {
+    $('btnPlayPause').textContent = state.playing ? '❚❚' : '▶';
+    $('btnPlayPause').classList.toggle('active', state.playing);
+  }
+  let toastTimer = 0;
+  function showToast(msg, ms = 1800) {
+    $('toast').textContent = msg;
+    $('toast').classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => $('toast').classList.remove('show'), ms);
+  }
+  function showStatus(msg) { $('statusBadge').textContent = msg; $('statusBadge').classList.add('show'); }
+  function hideStatus() { $('statusBadge').classList.remove('show'); }
+
+  /* ---------- 示例文本 ---------- */
+  const DEMO_TEXT = `大家好，欢迎来到今天的分享。
+
+今天我们要聊的主题是——如何让视频录制变得更专业、更自然。
+
+在传统的拍摄场景里，很多人会依赖提词器来避免忘词。但市面上的提词器要么价格昂贵，要么需要连接电脑。所以我们做了一个轻量方案——就是你现在在手机上打开的这个小工具。
+
+它的核心能力有五点：
+第一，滚动速度可以自由调节，支持匀速模式；
+第二，字体大小、背景颜色、文字颜色都可以改；
+第三，一键镜像，配合反光提词板使用；
+第四，可以调节文字显示区域距离四边的边距，让文字始终出现在画面的特定位置；
+第五，也是最特别的——智能语音跟随。开启后，工具会监听你朗读的实际节奏，自动匹配滚动速度，让提词内容始终"追着你"。
+
+如果你觉得这个小工具有用，欢迎分享给朋友。谢谢大家。`;
+
+  /* ---------- Service Worker 注册 ---------- */
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js').catch(()=>{});
+    });
+  }
+
+  /* ---------- 启动 ---------- */
+  bind();
+  if (!loadState()) {
+    buildTextLayer(DEMO_TEXT);
+  } else {
+    requestAnimationFrame(measure);
+  }
+  requestAnimationFrame(tick);
+
+  // 提醒用户可安装 PWA
+  window.addEventListener('beforeinstallprompt', (e) => {
+    // 静默——不强制提示，让用户浏览器默认机制处理
+  });
+
+})();
+</script>
+</body>
+</html>
