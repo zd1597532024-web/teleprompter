@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff5555"/>
+      <stop offset="1" stop-color="#c0392b"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <!-- 滚动文本示意 -->
+  <g fill="#ffffff" font-family="-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif" font-weight="600">
+    <text x="64" y="200" font-size="42" opacity="0.6">大家好，欢迎</text>
+    <text x="64" y="260" font-size="48">欢迎使用题词器</text>
+    <text x="64" y="320" font-size="42" opacity="0.6">让你的录制更专业</text>
+  </g>
+  <!-- 中心锚线 -->
+  <line x1="40" y1="256" x2="472" y2="256" stroke="#ffffff" stroke-width="3" stroke-dasharray="8 8"/>
+  <!-- 相机/提词板小标记 -->
+  <circle cx="420" cy="420" r="48" fill="#ffffff" opacity="0.15"/>
+  <circle cx="420" cy="420" r="24" fill="#ffffff"/>
+  <circle cx="420" cy="420" r="10" fill="#ff5555"/>
+</svg>
