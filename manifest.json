@@ -1,0 +1,21 @@
+{
+  "name": "题词器 Teleprompter",
+  "short_name": "题词器",
+  "description": "手机端轻量题词脚本工具：匀速/语音跟随滚动、镜像、边距、透明度全部可调。",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "lang": "zh-CN",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "permissions": ["microphone"]
+}
